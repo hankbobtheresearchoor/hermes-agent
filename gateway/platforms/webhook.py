@@ -646,6 +646,11 @@ class WebhookAdapter(BasePlatformAdapter):
 
         def _resolve(match: re.Match) -> str:
             key = match.group(1)
+            # Special tokens for metadata that may live in headers/path rather than payload.
+            if key == "event_type":
+                return event_type
+            if key == "route_name":
+                return route_name
             # Special token: dump the entire payload as JSON
             if key == "__raw__":
                 return json.dumps(payload, indent=2)[:4000]

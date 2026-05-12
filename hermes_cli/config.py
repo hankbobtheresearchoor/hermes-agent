@@ -958,6 +958,7 @@ DEFAULT_CONFIG = {
     # Web dashboard settings
     "dashboard": {
         "theme": "default",  # Dashboard visual theme: "default", "midnight", "ember", "mono", "cyberpunk", "rose"
+        "password": "",  # HTTP Basic Auth password for internet-exposed dashboards (username: hermes). Env: HERMES_DASHBOARD_PASSWORD
     },
 
     # Privacy settings

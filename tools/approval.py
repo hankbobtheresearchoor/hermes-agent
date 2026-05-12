@@ -364,6 +364,19 @@ DANGEROUS_PATTERNS = [
     (r'\bgit\s+push\b.*-f\b', "git force push short flag (rewrites remote history)"),
     (r'\bgit\s+clean\s+-[^\s]*f', "git clean with force (deletes untracked files)"),
     (r'\bgit\s+branch\s+-D\b', "git branch force delete"),
+    # Nomad orchestration mutations. Read-only inspection commands like
+    # `nomad job status`, `nomad alloc logs`, and `nomad node status` stay
+    # unflagged so the agent can inspect freely before asking approval for
+    # commands that change cluster/job/allocation state.
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*job\s+(run|stop|dispatch|restart|scale|promote|revert)\b', "nomad job mutation"),
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*deployment\s+(promote|fail|pause|resume)\b', "nomad deployment mutation"),
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*alloc\s+(stop|restart|signal|exec)\b', "nomad allocation mutation"),
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*node\s+(drain|eligibility)\b', "nomad node mutation"),
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*system\s+(gc|reconcile)\b', "nomad system mutation"),
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*operator\s+\w+', "nomad operator command"),
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*acl\s+\w+', "nomad ACL command"),
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*(namespace|quota|sentinel|volume)\s+(apply|delete|register|deregister)\b', "nomad cluster object mutation"),
+    (r'\bnomad\s+(?:-[^\s=]+(?:=\S+)?\s+)*var\s+(put|delete)\b', "nomad variable mutation"),
     # Script execution after chmod +x — catches the two-step pattern where
     # a script is first made executable then immediately run. The script
     # content may contain dangerous commands that individual patterns miss.

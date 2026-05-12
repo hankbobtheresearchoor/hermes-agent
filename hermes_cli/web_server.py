@@ -10,6 +10,7 @@ Usage:
 """
 
 import asyncio
+import base64
 import hmac
 import importlib.util
 import json
@@ -78,6 +79,23 @@ _SESSION_HEADER_NAME = "X-Hermes-Session-Token"
 # or HERMES_DASHBOARD_TUI=1.  Set from :func:`start_server`.
 _DASHBOARD_EMBEDDED_CHAT_ENABLED = False
 
+_DASHBOARD_PASSWORD: Optional[str] = None
+_DASHBOARD_USER = "hermes"
+_AUTH_COOKIE_NAME = "__hermes_auth"
+_AUTH_COOKIE_SECRET = secrets.token_urlsafe(32)
+
+
+def _resolve_dashboard_password() -> Optional[str]:
+    pw = os.environ.get("HERMES_DASHBOARD_PASSWORD", "").strip()
+    if pw:
+        return pw
+    try:
+        cfg = load_config()
+        pw = (cfg.get("dashboard") or {}).get("password", "")
+    except Exception:
+        pw = ""
+    return pw.strip() or None
+
 # Simple rate limiter for the reveal endpoint
 _reveal_timestamps: List[float] = []
 _REVEAL_MAX_PER_WINDOW = 5
@@ -93,6 +111,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_TUNNEL_MODE = False
+
+
+@app.middleware("http")
+async def cors_tunnel_middleware(request: Request, call_next):
+    if not _TUNNEL_MODE:
+        return await call_next(request)
+    # Handle preflight
+    if request.method == "OPTIONS":
+        origin = request.headers.get("origin", "")
+        return JSONResponse(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": origin or "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Max-Age": "86400",
+            },
+        )
+    response = await call_next(request)
+    origin = request.headers.get("origin", "")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 # ---------------------------------------------------------------------------
 # Endpoints that do NOT require the session token.  Everything else under
@@ -128,6 +173,47 @@ def _has_valid_session_token(request: Request) -> bool:
     auth = request.headers.get("authorization", "")
     expected = f"Bearer {_SESSION_TOKEN}"
     return hmac.compare_digest(auth.encode(), expected.encode())
+
+
+@app.middleware("http")
+async def basic_auth_middleware(request: Request, call_next):
+    if not _DASHBOARD_PASSWORD:
+        return await call_next(request)
+
+    # Check auth cookie first (set after a successful Basic Auth login,
+    # so SPA XHR requests work even though they overwrite Authorization
+    # with the Bearer session token).
+    cookie = request.cookies.get(_AUTH_COOKIE_NAME)
+    if cookie and hmac.compare_digest(cookie, _AUTH_COOKIE_SECRET):
+        return await call_next(request)
+
+    # Fall back to Basic Auth (browser's native login dialog).
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+            username, _, password = decoded.partition(":")
+            if (
+                username == _DASHBOARD_USER
+                and hmac.compare_digest(password, _DASHBOARD_PASSWORD)
+            ):
+                response = await call_next(request)
+                response.set_cookie(
+                    _AUTH_COOKIE_NAME,
+                    _AUTH_COOKIE_SECRET,
+                    httponly=True,
+                    samesite="lax",
+                    max_age=86400,
+                    secure=request.url.scheme == "https",
+                )
+                return response
+        except Exception:
+            pass
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Authentication required"},
+        headers={"WWW-Authenticate": 'Basic realm="Hermes Dashboard"'},
+    )
 
 
 def _require_token(request: Request) -> None:
@@ -193,20 +279,8 @@ def _is_accepted_host(host_header: str, bound_host: str) -> bool:
 
 @app.middleware("http")
 async def host_header_middleware(request: Request, call_next):
-    """Reject requests whose Host header doesn't match the bound interface.
-
-    Defends against DNS rebinding: a victim browser on a localhost
-    dashboard is tricked into fetching from an attacker hostname that
-    TTL-flips to 127.0.0.1. CORS and same-origin checks don't help —
-    the browser now treats the attacker origin as same-origin with the
-    dashboard. Host-header validation at the app layer catches it.
-
-    See GHSA-ppp5-vxwm-4cf7.
-    """
-    # Store the bound host on app.state so this middleware can read it —
-    # set by start_server() at listen time.
     bound_host = getattr(app.state, "bound_host", None)
-    if bound_host:
+    if bound_host and not _DASHBOARD_PASSWORD:
         host_header = request.headers.get("host", "")
         if not _is_accepted_host(host_header, bound_host):
             return JSONResponse(
@@ -4390,25 +4464,32 @@ def start_server(
     allow_public: bool = False,
     *,
     embedded_chat: bool = False,
+    password: Optional[str] = None,
 ):
     """Start the web UI server."""
     import uvicorn
 
-    global _DASHBOARD_EMBEDDED_CHAT_ENABLED
+    global _DASHBOARD_EMBEDDED_CHAT_ENABLED, _DASHBOARD_PASSWORD, _TUNNEL_MODE
     _DASHBOARD_EMBEDDED_CHAT_ENABLED = embedded_chat
+    _DASHBOARD_PASSWORD = _DASHBOARD_PASSWORD or _resolve_dashboard_password()
 
     _LOCALHOST = ("127.0.0.1", "localhost", "::1")
-    if host not in _LOCALHOST and not allow_public:
+    if host not in _LOCALHOST and not allow_public and not _DASHBOARD_PASSWORD:
         raise SystemExit(
             f"Refusing to bind to {host} — the dashboard exposes API keys "
             f"and config without robust authentication.\n"
-            f"Use --insecure to override (NOT recommended on untrusted networks)."
+            f"Use --insecure to override, or set a password with --password "
+            f"or dashboard.password in config.yaml."
         )
-    if host not in _LOCALHOST:
+    if host not in _LOCALHOST and not _DASHBOARD_PASSWORD:
         _log.warning(
             "Binding to %s with --insecure — the dashboard has no robust "
             "authentication. Only use on trusted networks.", host,
         )
+
+    if _DASHBOARD_PASSWORD:
+        _log.info("Dashboard password active (username: %s)", _DASHBOARD_USER)
+        _TUNNEL_MODE = True
 
     # Record the bound host so host_header_middleware can validate incoming
     # Host headers against it. Defends against DNS rebinding (GHSA-ppp5-vxwm-4cf7).
@@ -4427,4 +4508,6 @@ def start_server(
         threading.Thread(target=_open, daemon=True).start()
 
     print(f"  Hermes Web UI → http://{host}:{port}")
+    if _DASHBOARD_PASSWORD:
+        print(f"  Password protection: ON (user: {_DASHBOARD_USER})")
     uvicorn.run(app, host=host, port=port, log_level="warning")

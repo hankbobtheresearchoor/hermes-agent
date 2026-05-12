@@ -880,6 +880,49 @@ class TestGitDestructiveOps:
         assert dangerous is True
 
 
+class TestNomadCommandDetection:
+    """Nomad read-only inspection should be free, mutations require approval."""
+
+    def test_nomad_job_run_flagged(self):
+        dangerous, key, desc = detect_dangerous_command("nomad job run jobs/coordinator.nomad")
+        assert dangerous is True
+        assert key == "nomad job mutation"
+        assert "nomad" in desc.lower()
+
+    def test_nomad_job_run_with_global_addr_flag_flagged(self):
+        dangerous, key, desc = detect_dangerous_command(
+            "nomad -address=http://127.0.0.1:4646 job run -detach jobs/coordinator.nomad"
+        )
+        assert dangerous is True
+        assert key == "nomad job mutation"
+        assert "nomad" in desc.lower()
+
+    def test_nomad_alloc_exec_flagged(self):
+        dangerous, key, _ = detect_dangerous_command("nomad alloc exec abc123 /bin/sh")
+        assert dangerous is True
+        assert key == "nomad allocation mutation"
+
+    def test_nomad_acl_policy_apply_flagged(self):
+        dangerous, key, _ = detect_dangerous_command("nomad acl policy apply deploy deploy.hcl")
+        assert dangerous is True
+        assert key == "nomad ACL command"
+
+    def test_nomad_read_only_commands_not_flagged(self):
+        safe_commands = [
+            "nomad job status coordinator",
+            "nomad job plan jobs/coordinator.nomad",
+            "nomad alloc logs -tail -n 80 abc123 server",
+            "nomad node status",
+            "nomad server members",
+            "nomad deployment status abc123",
+        ]
+        for cmd in safe_commands:
+            dangerous, key, desc = detect_dangerous_command(cmd)
+            assert dangerous is False, f"{cmd!r} should be safe, got {key}: {desc}"
+            assert key is None
+            assert desc is None
+
+
 class TestChmodExecuteCombo:
     """chmod +x && ./ is the two-step social engineering pattern where a
     script is first made executable then immediately run. The script

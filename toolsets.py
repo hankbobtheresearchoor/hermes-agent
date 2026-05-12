@@ -368,6 +368,14 @@ TOOLSETS = {
         ],
         "includes": []
     },
+
+    "voice": {
+        "description": "Lightweight voice/meeting agent — minimal tools for low TTFT. Memory, search, file read, terminal, web, skill view only.",
+        "tools": [
+            "memory", "session_search", "read_file", "terminal", "web_search", "skill_view",
+        ],
+        "includes": []
+    },
     
     "hermes-cli": {
         "description": "Full interactive CLI toolset - all default tools plus cronjob management",
