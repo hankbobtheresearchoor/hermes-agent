@@ -52,7 +52,8 @@ def wiki_scan(wiki_path: str | None = None) -> dict:
     pages: list[dict] = []
     page_ids: set[str] = set()
     links: list[dict] = []
-    subdirs = ["entities", "concepts", "comparisons", "queries", "raw"]
+    subdirs = ["entities", "concepts", "comparisons", "queries", "raw",
+               "projects", "goals", "life", "issues"]
 
     # First pass: collect all pages
     for subdir in subdirs:
