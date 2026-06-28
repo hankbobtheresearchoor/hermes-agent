@@ -25,7 +25,8 @@ from tui_gateway.transport import (
     current_transport,
     reset_transport,
 )
-from tui_gateway.wiki_api import wiki_scan, wiki_page
+from tui_gateway.wiki_api import wiki_scan, wiki_page, resolve_wiki, wiki_list, wiki_taxonomy, wiki_flatten_taxonomy, wiki_expand_links, wiki_changesets
+import tui_gateway.wiki_api as wiki_api
 
 logger = logging.getLogger(__name__)
 
@@ -6914,3 +6915,119 @@ def _(rid, params: dict) -> dict:
     except Exception as e:
         logger.exception("wiki.page failed")
         return _err(rid, 5051, str(e))
+
+
+@method("wiki.list")
+def _(rid, params: dict) -> dict:
+    try:
+        result = wiki_list()
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("wiki.list failed")
+        return _err(rid, 5052, str(e))
+
+
+@method("wiki.taxonomy")
+def _(rid, params: dict) -> dict:
+    """Return the hierarchical taxonomy tree from taxonomy.yaml."""
+    try:
+        wiki_name = params.get("wiki")
+        wiki_path = resolve_wiki(wiki_name)
+        tax = wiki_taxonomy(wiki_path)
+        if tax is None:
+            return _err(rid, 4040, "taxonomy.yaml not found")
+        flat = wiki_flatten_taxonomy(wiki_path)
+        return _ok(rid, {"taxonomy": tax, "flat_paths": flat})
+    except Exception as e:
+        logger.exception("wiki.taxonomy failed")
+        return _err(rid, 5053, str(e))
+
+
+@method("wiki.expand_links")
+def _(rid, params: dict) -> dict:
+    """Expand integration_links for a wiki page to live status objects."""
+    try:
+        slug = params.get("slug")
+        if not slug:
+            return _err(rid, 4001, "slug is required")
+        wiki_name = params.get("wiki")
+        wiki_path = resolve_wiki(wiki_name)
+        result = wiki_expand_links(slug, wiki_path)
+        if "error" in result:
+            return _err(rid, 4040, result["error"])
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("wiki.expand_links failed")
+        return _err(rid, 5054, str(e))
+
+
+@method("wiki.changesets")
+def _(rid, params: dict) -> dict:
+    """Return paginated wiki changesets (timeline view)."""
+    try:
+        wiki_name = params.get("wiki")
+        wiki_path = resolve_wiki(wiki_name)
+        result = wiki_changesets(
+            wiki_path=wiki_path,
+            page=params.get("page"),
+            action=params.get("action"),
+            trigger=params.get("trigger"),
+            limit=params.get("limit", 50),
+            offset=params.get("offset", 0),
+            since=params.get("since"),
+            until=params.get("until"),
+        )
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("wiki.changesets failed")
+        return _err(rid, 5055, str(e))
+
+
+@method("feed.get")
+def _(rid, params: dict) -> dict:
+    """Return curated news feed from digest pipelines."""
+    try:
+        from tui_gateway.digest_store import get_feed as _feed_get
+        sources = params.get("sources")
+        if sources is not None and not isinstance(sources, list):
+            return _err(rid, 4001, "sources must be a list or null")
+        result = _feed_get(
+            sources=sources, since=params.get("since"),
+            limit=params.get("limit", 50), offset=params.get("offset", 0),
+        )
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("feed.get failed")
+        return _err(rid, 5200, str(e))
+
+
+@method("feed.sources")
+def _(rid, params: dict) -> dict:
+    """Return available feed sources and article counts."""
+    try:
+        from tui_gateway.digest_store import get_sources as _feed_sources
+        result = _feed_sources()
+        return _ok(rid, result)
+    except Exception as e:
+        logger.exception("feed.sources failed")
+        return _err(rid, 5201, str(e))
+    """Read a single wiki page by relative path.
+
+    Params:
+        - ``path`` (str, required): relative path inside the wiki root
+          (e.g. ``entities/dflash-mlx.md``).
+        - ``wiki_root`` (str, optional): override the wiki root directory.
+
+    Returns:
+        ``{"id": "...", "frontmatter": {...}, "body": "...", "path": "..."}``
+    """
+    rel = str(params.get("path", "") or "").strip()
+    if not rel:
+        return _err(rid, 5101, "path required")
+    try:
+        result = _wiki_mod.page(rel, params.get("wiki_root"))
+    except Exception as e:
+        return _err(rid, 5103, f"wiki.page error: {e}")
+    if result is None:
+        return _err(rid, 5102, "page not found or access denied")
+    return _ok(rid, result)
